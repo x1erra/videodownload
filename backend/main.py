@@ -50,24 +50,11 @@ async def websocket_endpoint(websocket: WebSocket):
 async def start_download(request: DownloadRequest):
     print(f"Received download request: {request.url}")
     # Start download in background executor
-    await downloader_service.start_download(request.url, request.format, request.quality)
-    print("Download scheduled, returning response.")
-    return {"status": "started", "url": request.url}
+    task_id = await downloader_service.start_download(request.url, request.format, request.quality)
+    print(f"Download scheduled with ID {task_id}, returning response.")
+    return {"status": "started", "url": request.url, "id": task_id}
 
-@app.get("/api/downloads")
-def get_downloads():
-    # List files in downloads directory
-    files = []
-    for filename in os.listdir("downloads"):
-        path = os.path.join("downloads", filename)
-        if os.path.isfile(path):
-            stat = os.stat(path)
-            files.append({
-                "filename": filename,
-                "size": stat.st_size,
-                "url": f"/files/{filename}"
-            })
-    return files
+
 
 
 import re

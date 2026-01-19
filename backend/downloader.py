@@ -7,6 +7,8 @@ import time
 import re
 from socket_manager import manager
 
+import uuid
+
 def sanitize_filename(name):
     # Remove potentially dangerous characters and ensure it's not too long
     sanitized = re.sub(r'[\\/*?:"<>|]', '', name)
@@ -20,29 +22,6 @@ class Downloader:
             if not os.path.exists(folder):
                 os.makedirs(folder)
 
-    def _progress_hook(self, d):
-        # This runs in a thread, so we need to bridge to asyncio for the websocket
-        # For simplicity, we might just fire-and-forget or use an event loop
-        # But since we are in a thread, we can't await directly on the main loop easily without thread-safety.
-        # Minimal data extraction
-        if d['status'] == 'downloading':
-            data = {
-                'type': 'progress',
-                'id': d.get('info_dict', {}).get('id', 'unknown'),
-                'filename': d.get('filename'),
-                'percent': d.get('_percent_str', '0%'),
-                'speed': d.get('_speed_str', '0'),
-                'eta': d.get('_eta_str', '0'),
-                'status': 'downloading'
-            }
-            asyncio.run_coroutine_threadsafe(manager.broadcast(data), self.loop)
-        
-        elif d['status'] == 'finished':
-            # We don't broadcast "finished" here because it triggers for each fragment/stream.
-            # Merging and post-processing happen after this.
-            # We will broadcast completion at the end of the _download_task.
-            pass
-
     async def start_download(self, url: str, format_id: str = "mp4", quality: str = "best", loop=None):
         if loop is None:
             try:
@@ -51,15 +30,32 @@ class Downloader:
                 loop = asyncio.new_event_loop()
         
         self.loop = loop
+        task_id = str(uuid.uuid4())
+        
         # Use default executor (ThreadPoolExecutor) to run blocking download
-        loop.run_in_executor(None, self._download_task, url, format_id, quality)
+        loop.run_in_executor(None, self._download_task, task_id, url, format_id, quality)
+        return task_id
 
-    def _download_task(self, url, format_id, quality):
+    def _download_task(self, task_id, url, format_id, quality):
         # We use the ID as the temporary filename to avoid collisions and special char issues in paths
-        # Default options
+        
+        # We need a progress hook that captures 'd' but also knows about 'task_id'
+        def progress_hook(d):
+             if d['status'] == 'downloading':
+                data = {
+                    'type': 'progress',
+                    'id': task_id,
+                    'filename': d.get('filename'), # This is the temp filename usually
+                    'percent': d.get('_percent_str', '0%'),
+                    'speed': d.get('_speed_str', '0'),
+                    'eta': d.get('_eta_str', '0'),
+                    'status': 'downloading'
+                }
+                asyncio.run_coroutine_threadsafe(manager.broadcast(data), self.loop)
+        
         ydl_opts = {
-            'outtmpl': 'processing/%(id)s.%(ext)s',
-            'progress_hooks': [self._progress_hook],
+            'outtmpl': f'processing/{task_id}.%(ext)s', # Use task_id for tracking temp file
+            'progress_hooks': [progress_hook],
             'quiet': False,
             'no_warnings': False,
             'continuedl': True,
@@ -105,18 +101,27 @@ class Downloader:
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 # 1. INITIALIZE & EXTRACT
-                info = ydl.extract_info(url, download=False)
-                video_id = info.get('id', 'unknown')
-                title = info.get('title', 'video')
-                
+                # Broadcast immediately
                 asyncio.run_coroutine_threadsafe(manager.broadcast({
                     'type': 'progress',
-                    'id': video_id,
-                    'filename': title,
+                    'id': task_id,
                     'status': 'initializing',
                     'percent': '0%',
                     'speed': 'Connecting...',
                     'eta': 'Preparing...'
+                }), self.loop)
+
+                info = ydl.extract_info(url, download=False)
+                # We don't use the video_id for the task ID anymore, but we can keep it for reference if needed
+                title = info.get('title', 'video')
+                
+                # Update with title
+                asyncio.run_coroutine_threadsafe(manager.broadcast({
+                    'type': 'progress',
+                    'id': task_id,
+                    'filename': title,
+                    'status': 'starting',
+                    'percent': '0%',
                 }), self.loop)
 
                 # 2. DOWNLOAD (to processing folder)
@@ -126,7 +131,7 @@ class Downloader:
                 # Broadcast merging status
                 asyncio.run_coroutine_threadsafe(manager.broadcast({
                     'type': 'progress',
-                    'id': video_id,
+                    'id': task_id,
                     'status': 'merging',
                     'percent': '99%',
                     'speed': 'Processing',
@@ -138,12 +143,12 @@ class Downloader:
 
                 # Find the actual resulting file
                 # yt-dlp might have changed the ext during merge
-                candidate_exts = [format_id if format_id != 'any' else 'mp4', 'mp4', 'mkv', 'webm', 'm4a', 'mp3', 'wav']
+                candidate_exts = [format_id if format_id != 'any' else 'mp4', 'mp4', 'mkv', 'webm', 'm4a', 'mp3', 'wav', 'jpg', 'webp']
                 actual_file = None
                 
-                # Try the direct name first
+                # Try the direct name first using task_id
                 possible_paths = [
-                    os.path.join("processing", f"{video_id}.{ext}") for ext in candidate_exts
+                    os.path.join("processing", f"{task_id}.{ext}") for ext in candidate_exts
                 ]
                 
                 for path in possible_paths:
@@ -173,7 +178,7 @@ class Downloader:
                 final_filename = os.path.basename(final_path)
                 asyncio.run_coroutine_threadsafe(manager.broadcast({
                     'type': 'finished',
-                    'id': video_id,
+                    'id': task_id,
                     'filename': final_filename,
                     'file_size': file_size,
                     'status': 'finished'
@@ -185,8 +190,8 @@ class Downloader:
             asyncio.run_coroutine_threadsafe(manager.broadcast({
                 'type': 'error',
                 'url': url,
-                'id': video_id if 'video_id' in locals() else 'error-' + str(hash(url)),
+                'id': task_id,
                 'error': str(e)
             }), self.loop)
-
+    
 downloader_service = Downloader()

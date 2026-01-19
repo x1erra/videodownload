@@ -17,7 +17,16 @@ services:
       - "3000:80"
     depends_on:
       - backend
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: ourtube-tunnel
+    command: tunnel run
+    environment:
+      - TUNNEL_TOKEN=${TUNNEL_TOKEN}
     restart: unless-stopped
+    depends_on:
+      - backend
+      - frontend
 
 volumes:
   downloads:

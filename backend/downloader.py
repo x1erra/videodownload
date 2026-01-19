@@ -89,10 +89,6 @@ class Downloader:
         
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                # Extract info first to get ID/Title immediately?
-                # info = ydl.extract_info(url, download=False)
-                # Broadcast "started"
-                
                 ydl.download([url])
         except Exception as e:
             print(f"Error downloading {url}: {e}")
@@ -100,6 +96,7 @@ class Downloader:
             asyncio.run_coroutine_threadsafe(manager.broadcast({
                 'type': 'error',
                 'url': url,
+                'id': 'error-' + str(hash(url)),
                 'error': str(e)
             }), self.loop)
 

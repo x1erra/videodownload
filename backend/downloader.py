@@ -164,9 +164,12 @@ class Downloader:
                 print(f"Success: {final_path} ({file_size} bytes)")
                 
                 # 4. FINISH
+                final_filename = os.path.basename(final_path)
                 asyncio.run_coroutine_threadsafe(manager.broadcast({
                     'type': 'finished',
                     'id': video_id,
+                    'filename': final_filename,
+                    'file_size': file_size,
                     'status': 'finished'
                 }), self.loop)
 

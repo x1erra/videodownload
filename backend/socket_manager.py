@@ -8,6 +8,7 @@ class ConnectionManager:
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
         self.active_connections.append(websocket)
+        await websocket.send_json({"type": "connected", "data": "Ready"})
 
     def disconnect(self, websocket: WebSocket):
         self.active_connections.remove(websocket)

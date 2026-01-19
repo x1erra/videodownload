@@ -44,8 +44,10 @@ class Downloader:
         ydl_opts = {
             'outtmpl': 'downloads/%(title)s.%(ext)s',
             'progress_hooks': [self._progress_hook],
-            'quiet': True,
-            'no_warnings': True,
+            'quiet': False, # More verbose for debugging
+            'no_warnings': False,
+            'nopart': True, # Don't use .part files, might help with premature access
+            'continuedl': True,
         }
 
         if format_id == 'thumbnail':
@@ -86,14 +88,40 @@ class Downloader:
         
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                # Extract info first to get a stable ID
+                # Extract info first to get a stable ID and filename
                 info = ydl.extract_info(url, download=False)
                 video_id = info.get('id', 'unknown')
+                title = info.get('title', 'video')
                 
-                # Run the actual download + merging
+                # Broadcast "Processing started"
+                asyncio.run_coroutine_threadsafe(manager.broadcast({
+                    'type': 'progress',
+                    'id': video_id,
+                    'filename': title,
+                    'status': 'initializing',
+                    'percent': '0%',
+                    'speed': 'Queued',
+                    'eta': 'Preparing...'
+                }), self.loop)
+
+                # Run the actual download
                 ydl.download([url])
                 
-                # Finally broadcast finished now that everything (including merging) is done
+                # Broadcast "Merging/Finalizing" just in case it takes a second
+                asyncio.run_coroutine_threadsafe(manager.broadcast({
+                    'type': 'progress',
+                    'id': video_id,
+                    'status': 'merging',
+                    'percent': '99%',
+                    'speed': 'Finishing',
+                    'eta': 'Merging...'
+                }), self.loop)
+
+                # Small delay to ensure OS flushes file handles
+                import time
+                time.sleep(1)
+
+                # Finally broadcast finished
                 asyncio.run_coroutine_threadsafe(manager.broadcast({
                     'type': 'finished',
                     'id': video_id,

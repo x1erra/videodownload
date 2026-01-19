@@ -46,11 +46,13 @@ class Downloader:
             'progress_hooks': [self._progress_hook],
             'quiet': False,
             'no_warnings': False,
-            'nopart': True,
             'continuedl': True,
             'nocheckcertificate': True,
-            'ignoreerrors': True,
-            'hls_prefer_native': True, # Try native HLS downloader if ffmpeg struggles
+            'ignoreerrors': False, # Set to False to catch issues
+            'retries': 10,
+            'fragment_retries': 10,
+            'concurrent_fragment_downloads': 5, # Speed up HLS
+            'hls_use_mpegts': True, # Can help with HLS merging
         }
 
         if format_id == 'thumbnail':
@@ -119,7 +121,7 @@ class Downloader:
 
                 # Wait for disk flush and potential ffmpeg cleanup
                 import time
-                time.sleep(5) 
+                time.sleep(10) 
 
                 # Double check file exists and has size
                 filename = ydl.prepare_filename(info)

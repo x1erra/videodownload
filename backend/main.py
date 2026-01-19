@@ -1,4 +1,5 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -76,6 +77,29 @@ def sanitize_filename(name: str) -> str:
     # Also prevent .. entirely just in case
     sanitized = sanitized.replace('..', '')
     return sanitized
+
+@app.get("/api/download/{filename}")
+def download_file(filename: str):
+    # Sanitize the input filename
+    safe_filename = sanitize_filename(filename)
+    
+    downloads_dir = os.path.abspath("downloads")
+    target_path = os.path.abspath(os.path.join(downloads_dir, safe_filename))
+    
+    # Verify path is actually inside downloads directory
+    if not target_path.startswith(downloads_dir):
+        print(f"Security Alert: Attempted path traversal with {filename}")
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
+    if os.path.exists(target_path):
+        # FileResponse with filename parameter automatically sets Content-Disposition: attachment
+        return FileResponse(
+            path=target_path,
+            filename=safe_filename,
+            media_type='application/octet-stream'
+        )
+        
+    raise HTTPException(status_code=404, detail="File not found")
 
 @app.delete("/api/downloads/{filename}")
 def delete_download(filename: str):

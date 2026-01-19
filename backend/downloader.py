@@ -29,13 +29,10 @@ class Downloader:
             asyncio.run_coroutine_threadsafe(manager.broadcast(data), self.loop)
         
         elif d['status'] == 'finished':
-            data = {
-                'type': 'finished',
-                'id': d.get('info_dict', {}).get('id', 'unknown'),
-                'filename': d.get('filename'),
-                'status': 'finished'
-            }
-            asyncio.run_coroutine_threadsafe(manager.broadcast(data), self.loop)
+            # We don't broadcast "finished" here because it triggers for each fragment/stream.
+            # Merging and post-processing happen after this.
+            # We will broadcast completion at the end of the _download_task.
+            pass
 
     def start_download(self, url: str, format_id: str = "mp4", quality: str = "best", loop=None):
         self.loop = loop
@@ -89,7 +86,19 @@ class Downloader:
         
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                # Extract info first to get a stable ID
+                info = ydl.extract_info(url, download=False)
+                video_id = info.get('id', 'unknown')
+                
+                # Run the actual download + merging
                 ydl.download([url])
+                
+                # Finally broadcast finished now that everything (including merging) is done
+                asyncio.run_coroutine_threadsafe(manager.broadcast({
+                    'type': 'finished',
+                    'id': video_id,
+                    'status': 'finished'
+                }), self.loop)
         except Exception as e:
             print(f"Error downloading {url}: {e}")
             # Broadcast error

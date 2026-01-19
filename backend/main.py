@@ -49,15 +49,9 @@ async def websocket_endpoint(websocket: WebSocket):
 @app.post("/api/downloads")
 async def start_download(request: DownloadRequest):
     print(f"Received download request: {request.url}")
-    # Pass the current loop to the downloader so it can schedule async callbacks
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = asyncio.get_event_loop()
-        
-    print(f"Got loop: {loop}, starting thread...")
-    downloader_service.start_download(request.url, request.format, request.quality, loop)
-    print("Thread started, returning response.")
+    # Start download in background executor
+    await downloader_service.start_download(request.url, request.format, request.quality)
+    print("Download scheduled, returning response.")
     return {"status": "started", "url": request.url}
 
 @app.get("/api/downloads")

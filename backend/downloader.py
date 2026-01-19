@@ -43,10 +43,16 @@ class Downloader:
             # We will broadcast completion at the end of the _download_task.
             pass
 
-    def start_download(self, url: str, format_id: str = "mp4", quality: str = "best", loop=None):
+    async def start_download(self, url: str, format_id: str = "mp4", quality: str = "best", loop=None):
+        if loop is None:
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+        
         self.loop = loop
-        thread = threading.Thread(target=self._download_task, args=(url, format_id, quality))
-        thread.start()
+        # Use default executor (ThreadPoolExecutor) to run blocking download
+        loop.run_in_executor(None, self._download_task, url, format_id, quality)
 
     def _download_task(self, url, format_id, quality):
         # We use the ID as the temporary filename to avoid collisions and special char issues in paths

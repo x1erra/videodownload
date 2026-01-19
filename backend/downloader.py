@@ -22,7 +22,7 @@ class Downloader:
             if not os.path.exists(folder):
                 os.makedirs(folder)
 
-    async def start_download(self, url: str, format_id: str = "mp4", quality: str = "best", task_id: str = None, loop=None):
+    async def start_download(self, url: str, format_id: str = "mp4", quality: str = "best", task_id: str = None, strict_mode: bool = False, split_chapters: bool = False, loop=None):
         if loop is None:
             try:
                 loop = asyncio.get_running_loop()
@@ -35,10 +35,10 @@ class Downloader:
             task_id = str(uuid.uuid4())
         
         # Use default executor (ThreadPoolExecutor) to run blocking download
-        loop.run_in_executor(None, self._download_task, task_id, url, format_id, quality)
+        loop.run_in_executor(None, self._download_task, task_id, url, format_id, quality, strict_mode, split_chapters)
         return task_id
 
-    def _download_task(self, task_id, url, format_id, quality):
+    def _download_task(self, task_id, url, format_id, quality, strict_mode, split_chapters):
         # We use the ID as the temporary filename to avoid collisions and special char issues in paths
         
         # We need a progress hook that captures 'd' but also knows about 'task_id'
@@ -65,7 +65,12 @@ class Downloader:
             'retries': 10,
             'fragment_retries': 10,
             'concurrent_fragment_downloads': 5, # Speed up HLS
+            'noplaylist': strict_mode, # Strict Mode
+            'split_chapters': split_chapters, # Split Chapters
         }
+
+        if split_chapters:
+             ydl_opts['force_keyframes_at_cuts'] = True # Ensure clean cuts for chapters
 
         if format_id == 'thumbnail':
             ydl_opts['writethumbnail'] = True

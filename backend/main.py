@@ -31,6 +31,7 @@ class DownloadRequest(BaseModel):
     url: str
     format: str = "mp4"
     quality: str = "best"
+    task_id: str = None  # Optional client-provided ID
     
 @app.get("/")
 def read_root():
@@ -48,9 +49,9 @@ async def websocket_endpoint(websocket: WebSocket):
 
 @app.post("/api/downloads")
 async def start_download(request: DownloadRequest):
-    print(f"Received download request: {request.url}")
+    print(f"Received download request: {request.url} with ID: {request.task_id}")
     # Start download in background executor
-    task_id = await downloader_service.start_download(request.url, request.format, request.quality)
+    task_id = await downloader_service.start_download(request.url, request.format, request.quality, task_id=request.task_id)
     print(f"Download scheduled with ID {task_id}, returning response.")
     return {"status": "started", "url": request.url, "id": task_id}
 

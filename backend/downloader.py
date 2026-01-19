@@ -22,7 +22,7 @@ class Downloader:
             if not os.path.exists(folder):
                 os.makedirs(folder)
 
-    async def start_download(self, url: str, format_id: str = "mp4", quality: str = "best", loop=None):
+    async def start_download(self, url: str, format_id: str = "mp4", quality: str = "best", task_id: str = None, loop=None):
         if loop is None:
             try:
                 loop = asyncio.get_running_loop()
@@ -30,7 +30,9 @@ class Downloader:
                 loop = asyncio.new_event_loop()
         
         self.loop = loop
-        task_id = str(uuid.uuid4())
+        # Use provided ID or generate a new one
+        if not task_id:
+            task_id = str(uuid.uuid4())
         
         # Use default executor (ThreadPoolExecutor) to run blocking download
         loop.run_in_executor(None, self._download_task, task_id, url, format_id, quality)

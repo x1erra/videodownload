@@ -44,10 +44,13 @@ class Downloader:
         ydl_opts = {
             'outtmpl': 'downloads/%(title)s.%(ext)s',
             'progress_hooks': [self._progress_hook],
-            'quiet': False, # More verbose for debugging
+            'quiet': False,
             'no_warnings': False,
-            'nopart': True, # Don't use .part files, might help with premature access
+            'nopart': True,
             'continuedl': True,
+            'nocheckcertificate': True,
+            'ignoreerrors': True,
+            'hls_prefer_native': True, # Try native HLS downloader if ffmpeg struggles
         }
 
         if format_id == 'thumbnail':
@@ -61,9 +64,10 @@ class Downloader:
                 'preferredquality': '192',
             }]
         else:
-             # Video Mode (MP4, Any, etc)
-             # 1. Determine Quality Selector
-             format_selector = 'bestvideo+bestaudio/best' # default
+             # Video Mode
+             # For Twitch/HLS, sometimes bestvideo+bestaudio causes chunk issues
+             # We will try to force a single format if possible or better merging
+             format_selector = 'bestvideo+bestaudio/best'
              
              if quality == 'best':
                  format_selector = 'bestvideo+bestaudio/best'
@@ -76,11 +80,7 @@ class Downloader:
                  format_selector = f'bestvideo[height<={height}]+bestaudio/best[height<={height}]'
              
              ydl_opts['format'] = format_selector
-
-             # 2. Apply Container Constraint
-             if format_id == 'mp4':
-                 ydl_opts['merge_output_format'] = 'mp4'
-             # 'any' leaves merge_output_format unset, preserving original container (mkv/webm)
+             ydl_opts['merge_output_format'] = 'mp4' if format_id == 'mp4' or format_id == 'any' else None
         
         
         # Instagram/Twitter specific headers or cookies might be needed here
@@ -88,40 +88,50 @@ class Downloader:
         
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                # Extract info first to get a stable ID and filename
+                # 1. INITIALIZE & EXTRACT
                 info = ydl.extract_info(url, download=False)
                 video_id = info.get('id', 'unknown')
                 title = info.get('title', 'video')
                 
-                # Broadcast "Processing started"
                 asyncio.run_coroutine_threadsafe(manager.broadcast({
                     'type': 'progress',
                     'id': video_id,
                     'filename': title,
                     'status': 'initializing',
                     'percent': '0%',
-                    'speed': 'Queued',
+                    'speed': 'Connecting...',
                     'eta': 'Preparing...'
                 }), self.loop)
 
-                # Run the actual download
+                # 2. DOWNLOAD
                 ydl.download([url])
                 
-                # Broadcast "Merging/Finalizing" just in case it takes a second
+                # 3. POST-PROCESSING BLOCK
+                # Twitch HLS merging can be slow and brittle on Pi
                 asyncio.run_coroutine_threadsafe(manager.broadcast({
                     'type': 'progress',
                     'id': video_id,
                     'status': 'merging',
                     'percent': '99%',
-                    'speed': 'Finishing',
-                    'eta': 'Merging...'
+                    'speed': 'Processing',
+                    'eta': 'Finalizing File...'
                 }), self.loop)
 
-                # Small delay to ensure OS flushes file handles
+                # Wait for disk flush and potential ffmpeg cleanup
                 import time
-                time.sleep(1)
+                time.sleep(5) 
 
-                # Finally broadcast finished
+                # Double check file exists and has size
+                filename = ydl.prepare_filename(info)
+                # If we merged to mp4, the extension might have changed
+                if not os.path.exists(filename) and os.path.exists(filename.rsplit('.', 1)[0] + '.mp4'):
+                    filename = filename.rsplit('.', 1)[0] + '.mp4'
+
+                if os.path.exists(filename):
+                    file_size = os.path.getsize(filename)
+                    print(f"Download finished: {filename} ({file_size} bytes)")
+                
+                # 4. FINISH
                 asyncio.run_coroutine_threadsafe(manager.broadcast({
                     'type': 'finished',
                     'id': video_id,

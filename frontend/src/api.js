@@ -1,8 +1,9 @@
-const API_URL = "http://localhost:8000";
+const API_BASE_URL = 'https://api.xierra.xyz/api';
+const WS_BASE_URL = 'wss://api.xierra.xyz/ws';
 
 export const api = {
     startDownload: async (url, format = "best", quality = "best") => {
-        const response = await fetch(`${API_URL}/api/downloads`, {
+        const response = await fetch(`${API_BASE_URL}/downloads`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ url, format, quality }),

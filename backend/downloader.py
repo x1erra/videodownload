@@ -2,14 +2,23 @@ import yt_dlp
 import threading
 import asyncio
 import os
+import shutil
+import time
+import re
 from socket_manager import manager
+
+def sanitize_filename(name):
+    # Remove potentially dangerous characters and ensure it's not too long
+    sanitized = re.sub(r'[\\/*?:"<>|]', '', name)
+    return sanitized[:200]
 
 class Downloader:
     def __init__(self):
         self.active_downloads = {}
-        # Ensure downloads folder exists
-        if not os.path.exists("downloads"):
-            os.makedirs("downloads")
+        # Ensure folders exist
+        for folder in ["downloads", "processing"]:
+            if not os.path.exists(folder):
+                os.makedirs(folder)
 
     def _progress_hook(self, d):
         # This runs in a thread, so we need to bridge to asyncio for the websocket
@@ -40,19 +49,18 @@ class Downloader:
         thread.start()
 
     def _download_task(self, url, format_id, quality):
+        # We use the ID as the temporary filename to avoid collisions and special char issues in paths
         # Default options
         ydl_opts = {
-            'outtmpl': 'downloads/%(title)s.%(ext)s',
+            'outtmpl': 'processing/%(id)s.%(ext)s',
             'progress_hooks': [self._progress_hook],
             'quiet': False,
             'no_warnings': False,
             'continuedl': True,
             'nocheckcertificate': True,
-            'ignoreerrors': False, # Set to False to catch issues
             'retries': 10,
             'fragment_retries': 10,
             'concurrent_fragment_downloads': 5, # Speed up HLS
-            'hls_use_mpegts': True, # Can help with HLS merging
         }
 
         if format_id == 'thumbnail':
@@ -105,33 +113,55 @@ class Downloader:
                     'eta': 'Preparing...'
                 }), self.loop)
 
-                # 2. DOWNLOAD
+                # 2. DOWNLOAD (to processing folder)
                 ydl.download([url])
                 
-                # 3. POST-PROCESSING BLOCK
-                # Twitch HLS merging can be slow and brittle on Pi
+                # 3. VERIFY & MOVE (Atomic)
+                # Broadcast merging status
                 asyncio.run_coroutine_threadsafe(manager.broadcast({
                     'type': 'progress',
                     'id': video_id,
                     'status': 'merging',
                     'percent': '99%',
                     'speed': 'Processing',
-                    'eta': 'Finalizing File...'
+                    'eta': 'Finalizing...'
                 }), self.loop)
 
-                # Wait for disk flush and potential ffmpeg cleanup
-                import time
-                time.sleep(10) 
+                # Small sleep to let ffmpeg close descriptors
+                time.sleep(2)
 
-                # Double check file exists and has size
-                filename = ydl.prepare_filename(info)
-                # If we merged to mp4, the extension might have changed
-                if not os.path.exists(filename) and os.path.exists(filename.rsplit('.', 1)[0] + '.mp4'):
-                    filename = filename.rsplit('.', 1)[0] + '.mp4'
+                # Find the actual resulting file
+                # yt-dlp might have changed the ext during merge
+                candidate_exts = [format_id if format_id != 'any' else 'mp4', 'mp4', 'mkv', 'webm', 'm4a', 'mp3', 'wav']
+                actual_file = None
+                
+                # Try the direct name first
+                possible_paths = [
+                    os.path.join("processing", f"{video_id}.{ext}") for ext in candidate_exts
+                ]
+                
+                for path in possible_paths:
+                    if os.path.exists(path):
+                        actual_file = path
+                        break
+                
+                if not actual_file:
+                    raise Exception("Could not find downloaded file in processing directory")
 
-                if os.path.exists(filename):
-                    file_size = os.path.getsize(filename)
-                    print(f"Download finished: {filename} ({file_size} bytes)")
+                # Move to final location with sanitized title
+                ext = actual_file.rsplit('.', 1)[-1]
+                safe_title = sanitize_filename(title)
+                final_path = os.path.join("downloads", f"{safe_title}.{ext}")
+                
+                # If file already exists, add timestamp to avoid collision
+                if os.path.exists(final_path):
+                    final_path = os.path.join("downloads", f"{safe_title}_{int(time.time())}.{ext}")
+
+                shutil.move(actual_file, final_path)
+                
+                # Double check size for logging
+                file_size = os.path.getsize(final_path)
+                print(f"Success: {final_path} ({file_size} bytes)")
                 
                 # 4. FINISH
                 asyncio.run_coroutine_threadsafe(manager.broadcast({
@@ -139,13 +169,14 @@ class Downloader:
                     'id': video_id,
                     'status': 'finished'
                 }), self.loop)
+
         except Exception as e:
             print(f"Error downloading {url}: {e}")
             # Broadcast error
             asyncio.run_coroutine_threadsafe(manager.broadcast({
                 'type': 'error',
                 'url': url,
-                'id': 'error-' + str(hash(url)),
+                'id': video_id if 'video_id' in locals() else 'error-' + str(hash(url)),
                 'error': str(e)
             }), self.loop)
 

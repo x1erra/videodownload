@@ -69,10 +69,38 @@ def get_downloads():
             })
     return files
 
+
+import re
+
+def sanitize_filename(name: str) -> str:
+    # Remove potentially dangerous characters and ensure it's not too long
+    # This removes \ / : * ? " < > | and any control characters
+    sanitized = re.sub(r'[\\/*?:"<>|]', '', name)
+    # Also prevent .. entirely just in case
+    sanitized = sanitized.replace('..', '')
+    return sanitized
+
 @app.delete("/api/downloads/{filename}")
 def delete_download(filename: str):
-    path = os.path.join("downloads", filename)
-    if os.path.exists(path):
-        os.remove(path)
-        return {"status": "deleted", "filename": filename}
+    # 1. Sanitize the input filename
+    safe_filename = sanitize_filename(filename)
+    
+    # 2. Reject if the filename was significantly altered (implies malicious intent or invalid chars)
+    # Alternatively, we could just use the safe_filename, but rejecting avoids ambiguity.
+    # For now, let's just ensure we only operate on the safe name.
+    
+    downloads_dir = os.path.abspath("downloads")
+    target_path = os.path.abspath(os.path.join(downloads_dir, safe_filename))
+    
+    # 3. Verify path is actually inside downloads directory
+    if not target_path.startswith(downloads_dir):
+        # This should technically be impossible due to sanitize_filename removing slashes,
+        # but it's a critical second layer of defense (defense in depth).
+        print(f"Security Alert: Attempted path traversal with {filename}")
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
+    if os.path.exists(target_path):
+        os.remove(target_path)
+        return {"status": "deleted", "filename": safe_filename}
+        
     raise HTTPException(status_code=404, detail="File not found")

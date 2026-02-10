@@ -65,6 +65,19 @@ async def start_download(request: DownloadRequest):
     print(f"Download scheduled with ID {task_id}, returning response.")
     return {"status": "started", "url": request.url, "id": task_id}
 
+@app.get("/api/downloads")
+def list_downloads():
+    files = []
+    downloads_dir = "downloads"
+    for filename in os.listdir(downloads_dir):
+        path = os.path.join(downloads_dir, filename)
+        if os.path.isfile(path):
+            files.append({
+                "filename": filename,
+                "url": f"/api/download/{filename}",
+                "size": os.path.getsize(path)
+            })
+    return files
 
 
 
@@ -125,3 +138,18 @@ def delete_download(filename: str):
         return {"status": "deleted", "filename": safe_filename}
         
     raise HTTPException(status_code=404, detail="File not found")
+
+# --- Legacy v3 Support ---
+@app.get("/api/v3/download")
+def download_file_v3(filename: str):
+    """Support legacy query-string based downloads used by the frontend."""
+    return download_file(filename)
+
+@app.get("/api/v3/downloads")
+def list_downloads_v3():
+    return list_downloads()
+
+@app.post("/api/v3/downloads")
+async def start_download_v3(request: DownloadRequest):
+    return await start_download(request)
+# -------------------------
